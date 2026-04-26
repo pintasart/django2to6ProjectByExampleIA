@@ -41,7 +41,7 @@ Each product will have a name, optional description, optional image, price, and 
 #     slug = models.SlugField(max_length=200, db_index=True)
 #     description = models.TextField(blank=True)
 class Product(TranslatableModel):
-    tranlations = TranslatedFields(
+    translations = TranslatedFields(
         name = models.CharField(max_length=200, db_index=True),
         slug = models.SlugField(max_length=200, db_index=True),
         description = models.TextField(blank=True)
