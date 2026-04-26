@@ -10,5 +10,3 @@ urlpatterns = [
     path(_('done/'), views.payment_done, name='done'),
     path(_('canceled/'), views.payment_canceled, name='canceled'),
 ]
-
-

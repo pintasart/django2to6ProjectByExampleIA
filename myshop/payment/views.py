@@ -1,6 +1,6 @@
 import braintree
-from django.shortcuts import render, redirect, get_object_or_404 
-from orders.models import Order 
+from django.shortcuts import render, redirect, get_object_or_404
+from orders.models import Order
 
 
 from django.template.loader import render_to_string
@@ -12,7 +12,7 @@ from io import BytesIO
 # Create your views here.
 
 
-def payment_process(request): 
+def payment_process(request):
     order_id = request.session.get('order_id')
     order = get_object_or_404(Order, id=order_id)
 
@@ -43,7 +43,7 @@ def payment_process(request):
             # generate PDF
             html = render_to_string('orders/order/pdf.html', {'order': order})
             out = BytesIO()
-            stylesheets=[weasyprint.CSS(settings.STATIC_ROOT + 'css/pdf.css')]
+            stylesheets = [weasyprint.CSS(settings.STATIC_ROOT + 'css/pdf.css')]
             weasyprint.HTML(string=html).write_pdf(out,
                                                    stylesheets=stylesheets)
             # attach PDF file
@@ -52,25 +52,22 @@ def payment_process(request):
                          'application/pdf')
             # send e-mail
             email.send()
-
-
-
             return redirect('payment:done')
         else:
             return redirect('payment:canceled')
     else:
-        # generate token 
+        # generate token
         client_token = braintree.ClientToken.generate()
-        return render(request, 
-                      'payment/process.html', 
-                      {'order': order,
-                       'client_token': client_token})
+        return render(
+            request,
+            'payment/process.html',
+            {'order': order, 'client_token': client_token},
+        )
 
 
 def payment_done(request):
     return render(request, 'payment/done.html')
 
+
 def payment_canceled(request):
     return render(request, 'payment/canceled.html')
-
-    
