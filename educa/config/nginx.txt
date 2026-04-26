@@ -1,0 +1,98 @@
+
+
+'''
+NGINX is a web server focused on high concurrency, performance, and low memory usage.
+NGINX also acts as a reverse proxy, receiving HTTP requests, and routing them to different
+backends. 
+'''
+
+
+
+
+########################################################
+# Installing NGINX
+-------------------------------
+
+
+# Install NGINX with the following command:
+sudo apt-get install nginx
+
+
+
+########################################################
+# Configuring NGINX
+-------------------------------
+
+server {
+	listen 80;
+	server_name www.educaproject.com educaproject.com;
+	
+	location / {
+		include /etc/nginx/uwsgi_params;
+		uwsgi_pass educa;
+	}
+	
+	location /static/ {
+		alias /home/projects/educa/static/;
+	}
+	
+	location /media/ {
+		alias /home/projects/educa/media/;
+	}
+}
+
+
+
+
+########################################################
+# Securing connections with SSL
+-------------------------------
+
+# Creating an SSL certificate
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout ssl/educa.key
+-out ssl/educa.crt
+
+
+########################################################
+# Configuring NGINX to use SSL
+-------------------------------
+
+#Edit the nginx.conf file and edit the server directive to include SSL as follows:
+
+server {
+	listen 80;
+	listen 443 ssl;
+	ssl_certificate /home/projects/educa/ssl/educa.crt;
+	ssl_certificate_key /home/projects/educa/ssl/educa.key;
+	server_name www.educaproject.com educaproject.com;
+	# ...
+}
+
+
+#Restart NGINX with the following command:
+#sudo service nginx restart
+
+
+
+########################################################
+# Configuring DJANGO to use SSL
+-------------------------------
+
+# Django comes with specific settings for SSL support. Edit the settings/pro.py 
+# settings file and add the following settings to it:
+SECURE_SSL_REDIRECT = True
+CSRF_COOKIE_SECURE = True
+
+
+
+########################################################
+# Serving multiple subdomains with NGINX
+----------------------------------------
+#We need NGINX to be able to serve our site with any possible subdomain. Edit 
+# the config/nginx.conf file and replace this line:
+server_name www.educaproject.com educaproject.com;
+
+#With the following one:
+server_name *.educaproject.com educaproject.com;
+
+

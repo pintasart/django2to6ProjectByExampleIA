@@ -1,0 +1,91 @@
+# Por defeito o ubuntu trabalhar com o python2.x
+
+# Se por default o python2.7
+$ sudo apt-get install python-virtualenv
+$ virtualenv -p python3 env
+$ source ./env/bin/activate
+
+# Se por default o python3.x
+$ sudo apt-get install python3-venv
+$ python3 -m venv env
+$ source ./env/bin/activate
+
+
+#####################################
+
+mkdir env
+
+python3 -m venv env/myshop
+source env/myshop/bin/activate
+pip install Django==2.0.5
+pip install Pillow==5.1.0
+
+#Celery is a distributed task queue that can process vast amounts of messages. It does real-time processing but also supports task scheduling. 
+pip install celery==4.1.0
+
+
+#Celery requires a message broker in order to handle requests from an external source. The broker takes care of sending messages to Celery workers, which process tasks as they receive them
+
+#If you need to install RabbitMQ on macOS X or Windows, you can find standalone versions at https://www.rabbitmq.com/download.html.
+apt-get install rabbitmq-server
+#launch 
+rabbitmq-server
+
+
+#ver servidor celery 
+pip install flower==0.9.2
+celery -A myshop flower
+
+
+pip install braintree==3.45.0
+
+pip install WeasyPrint==0.42.3
+
+
+
+
+
+
+
+django-admin startproject myshop
+cd myshop/
+django-admin startapp shop
+
+
+
+python manage.py makemigrations
+python manage.py migrate
+
+python manage.py createsuperuser
+
+python manage.py runserver
+
+http://127.0.0.1:8000
+http://127.0.0.1:8000/admin/
+
+
+
+# Translate
+django-admin makemessages --all
+
+# Run the following command to compile the translation files:
+django-admin compilemessages
+
+
+
+
+# Rosetta is a third-party application that allows you to edit 
+# translations using the same interface as the Django administration site. 
+
+pip install django-rosetta==0.8.1
+
+
+# This module offers a very effective way to translate models
+# and it integrates smoothly with Django's administration site.
+pip install django-parler==1.9.2
+
+#django-localflavor is a third-party module that contains a collection
+# of specific utils, such as form fields or model fields that are specific
+# for each country. 
+pip install django-localflavor==2.0
+

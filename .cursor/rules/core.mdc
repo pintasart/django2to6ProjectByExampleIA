@@ -1,0 +1,161 @@
+---
+description: Regras principais para o projecto Django 2 By Example — stack, estrutura, convenções e restrições.
+globs: ["**/*.py", "**/settings*.py", "**/models.py", "**/views.py", "**/urls.py"]
+alwaysApply: true
+---
+
+# Django 2 By Example — Core Rules
+
+## Stack e Versões Exactas
+
+| Componente | Versão |
+|---|---|
+| Python | 3.12.3 |
+| Django (venv activo) | 6.0.4 |
+| Django (código original do livro) | 2.0.5 / 2.1.1 |
+| psycopg2-binary | 2.9.12 |
+| pytest | 9.0.3 |
+| pytest-django | 4.12.0 |
+| flake8 | 7.3.0 |
+| asgiref | 3.11.1 |
+| sqlparse | 0.5.5 |
+
+> Atenção: o código dos projectos foi escrito para Django 2.x. O venv instalado é Django 6.x. Não actualizes imports, APIs nem comportamentos sem verificar compatibilidade.
+
+Dependências referenciadas nos settings mas **não instaladas no venv** (requerem instalação manual):
+- `django-taggit` (mysite)
+- `django-parler`, `django-rosetta`, `django-localflavor` (myshop)
+- `celery`, `braintree`, `WeasyPrint` (myshop)
+- `social-auth-app-django`, `sorl-thumbnail` (bookmarks)
+- `djangorestframework` (educa)
+
+---
+
+## Estrutura dos Projectos
+
+Este repositório contém **quatro projectos independentes**. Cada um tem o seu próprio `manage.py` e base de dados.
+
+```
+DJANGOBYEXAMPLE/
+├── mysite/          # Blog com tags, sitemap, feeds — Django 2.1
+│   └── blog/            # models: Post (PublishedManager), Comment
+├── myshop/          # E-commerce com i18n, Celery, Braintree — Django 2.0
+│   ├── shop/            # models: Category, Product (TranslatableModel via parler)
+│   ├── cart/            # lógica de carrinho em sessão (CART_SESSION_ID = 'cart')
+│   ├── orders/          # models: Order; tasks Celery em tasks.py
+│   ├── payment/         # integração Braintree
+│   └── coupons/         # descontos
+├── bookmarks/       # Rede social de bookmarks, OAuth, activity stream — Django 2.1
+│   ├── account/         # auth por email (EmailAuthBackend), dashboard
+│   ├── images/          # upload + thumbnails (sorl); signals no save
+│   └── actions/         # activity stream genérico
+├── educa/           # Plataforma de ensino com REST API — Django 2.0
+│   ├── courses/         # Subject, Course, Module, Content (GenericFK), ItemBase
+│   └── educa/settings/  # base.py / local.py / pro.py
+└── venv/            # venv partilhado
+```
+
+---
+
+## Comandos Django Essenciais
+
+Activar sempre o venv antes de qualquer comando:
+```bash
+source venv/bin/activate
+cd <projecto>          # ex: cd mysite
+```
+
+### Desenvolvimento
+```bash
+python manage.py runserver
+# educa usa settings separados:
+python manage.py runserver --settings=educa.settings.local
+```
+
+### Migrações
+```bash
+python manage.py makemigrations
+python manage.py migrate
+python manage.py showmigrations
+```
+
+### Dados
+```bash
+python manage.py createsuperuser
+python manage.py loaddata subjects.json                          # educa
+python manage.py dumpdata courses --indent=2 --output=courses/fixtures/subjects.json
+```
+
+### Ficheiros Estáticos e i18n
+```bash
+python manage.py collectstatic
+django-admin makemessages --all   # myshop (EN/ES)
+django-admin compilemessages
+```
+
+### Testes
+```bash
+pytest                            # todos os testes do projecto actual
+pytest <app>/tests.py -v          # ficheiro específico
+```
+
+### Qualidade de Código
+```bash
+flake8 <projecto>/                # sem config; usa defaults PEP 8
+```
+
+---
+
+## Convenções de Código Observadas no Livro
+
+### Models
+- Sempre definir `__str__` e `get_absolute_url` em cada model.
+- Usar `auto_now_add=True` para `created` e `auto_now=True` para `updated`.
+- Managers customizados declarados **antes** do manager por omissão: `objects = models.Manager()` explícito quando há managers adicionais.
+- `STATUS_CHOICES` definido como tuplo de tuplos directamente no model (não como `TextChoices`).
+- `related_name` sempre explícito em `ForeignKey` e `ManyToManyField`.
+- Models abstractos usam `related_name='%(class)s_related'` para evitar colisões.
+- `Meta.ordering` em lista ou tuplo com `-` para descendente.
+- `verbose_name` e `verbose_name_plural` em modelos com nomes irregulares.
+
+### URLs
+- Namespaces de app definidos em `app_name` no `urls.py` de cada app.
+- `reverse()` e `{% url %}` usam sempre o namespace: `'blog:post_detail'`.
+- Slugs com `unique_for_date` em vez de apenas `unique=True` quando a unicidade é por data.
+
+### Views
+- Function-based views (FBV) por omissão; class-based views (CBV) apenas quando o livro as introduz explicitamente.
+- Paginação com `django.core.paginator.Paginator`; nunca com pacotes externos.
+- Context processors para disponibilizar dados globais (ex: `cart.context_processors.cart`).
+
+### Templates
+- Directório `templates/<app>/` dentro de cada app (não `templates/` global).
+- Herança com `{% extends "base.html" %}` e `{% block content %}`.
+
+### Settings
+- `BASE_DIR` calculado com `os.path.dirname(os.path.abspath(__file__))`.
+- `gettext_lazy as _` importado em settings com i18n activa.
+- `EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'` em desenvolvimento.
+
+### Tarefas Assíncronas (myshop)
+- Celery tasks em `<app>/tasks.py`; decoradas com `@shared_task`.
+
+### REST API (educa)
+- Permissões globais em `REST_FRAMEWORK['DEFAULT_PERMISSION_CLASSES']`.
+- Serializers em `<app>/serializers.py`; viewsets em `<app>/api/views.py`.
+
+---
+
+## O Que Nunca Fazer Neste Projecto
+
+- **Não usar `django.utils.translation.ugettext_lazy`** — foi removido no Django 4.0; usar `gettext_lazy`.
+- **Não actualizar a API de URLs** (`django.conf.urls.url()` foi removido no Django 4.0; usar `path()` e `re_path()`).
+- **Não misturar projectos** — cada directório é independente; não importar entre `mysite`, `myshop`, `bookmarks` ou `educa`.
+- **Não usar `on_delete=models.CASCADE` implícito** — é obrigatório e explícito desde Django 2.0.
+- **Não usar `index_together`** — foi depreciado no Django 4.2; usar `indexes = [models.Index(fields=[...])]`.
+- **Não aplicar migrações sem `makemigrations` primeiro** — nenhum projecto usa `--run-syncdb` fora de SQLite em dev.
+- **Não colocar credenciais reais** nos settings — os campos OAuth (Facebook, Twitter, Google, Braintree) ficam vazios `''` em desenvolvimento.
+- **Não instalar pacotes no sistema** — usar sempre `source venv/bin/activate` antes de `pip install`.
+- **Não criar uma app nova com `startapp` sem registar em `INSTALLED_APPS`** usando a forma `AppConfig`: `'app.apps.AppConfig'`.
+- **Não usar `CharField` para preços** — usar `DecimalField(max_digits=10, decimal_places=2)`.
+- **Não alterar `myshop/cart/models1.py`** — ficheiro de rascunho do livro; o carrinho real é a classe em `cart/cart.py` (sessão, não BD).

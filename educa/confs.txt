@@ -1,0 +1,52 @@
+
+#Criar virtualenv
+
+
+
+mkdir env
+#virtualenv env/educa
+virtualenv -p python3 educa
+source env/educa/bin/activate
+
+
+#Install Django in your virtual environment 
+pip install Django==2.0.5
+
+
+#manage image uploads
+pip install Pillow==5.1.0
+
+
+# Create a new project using the following command:
+django-admin startproject educa
+
+cd educa
+django-admin startapp courses
+
+
+
+python manage.py makemigrations
+python manage.py migrate
+python manage.py createsuperuser
+python manage.py runserver
+
+# The dumpdata command dumps data from the database into
+# the standard output, serialized in JSON format by default. 
+python3 manage.py dumpdata courses --indent=2
+
+#  For more information on dumpdata parameters, run python manage.py dumpdata --help.
+
+
+# Save this dump to a fixtures file into a fixtures/ directory in the orders
+# application using the following commands:
+mkdir courses/fixtures
+python3 manage.py dumpdata courses --indent=2 --output=courses/fixtures/subjects.json
+
+# load the fixture into the database using the following command:
+python3 manage.py loaddata subjects.json
+
+
+
+pip install django-braces==1.13.0
+
+

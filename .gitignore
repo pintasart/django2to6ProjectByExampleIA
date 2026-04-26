@@ -1,0 +1,29 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Bases de dados locais
+*.sqlite3
+
+# Ambientes Virtuais
+venv/
+env/
+.env
+.venv
+
+# Ficheiros de Log
+*.log
+
+# Media e Static (ficheiros carregados por utilizadores e ficheiros compilados)
+media/
+staticfiles/
+
+# Configurações de IDEs (VS Code, PyCharm)
+.vscode/
+.idea/
+
+# Sistema Operativo
+.DS_Store
+Thumbs.db
+
