@@ -1,0 +1,151 @@
+---
+description: Padrões para models Django 6.x — estrutura, choices, managers, meta, FK, parler, signals. Retirado do código real dos 4 projectos.
+globs: ["**/models.py", "**/fields.py"]
+alwaysApply: false
+---
+
+# Django Models — Padrões (Django 6.x)
+
+## Estrutura canónica
+
+```python
+class Post(models.Model):
+    class Status(models.TextChoices):       # 1. Choices
+        DRAFT = 'draft', 'Draft'
+        PUBLISHED = 'published', 'Published'
+
+    title  = models.CharField(max_length=250)            # 2. Campos
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='blog_posts',
+    )
+    status = models.CharField(max_length=10, choices=Status, default=Status.DRAFT)
+
+    objects   = models.Manager()            # 3. Managers — objects SEMPRE primeiro
+    published = PublishedManager()
+
+    class Meta:                             # 4. Meta
+        ordering = ['-publish']
+        indexes  = [models.Index(fields=['-publish'])]
+
+    def __str__(self): return self.title    # 5. __str__
+
+    def get_absolute_url(self): ...         # 6. get_absolute_url
+```
+
+## Managers customizados
+
+```python
+class PublishedManager(models.Manager):    # definir FORA do model
+    def get_queryset(self):
+        return super().get_queryset().filter(status='published')
+```
+
+Omitir `objects = models.Manager()` quando há managers adicionais remove o manager padrão — `Post.objects.all()` falha.
+
+## Meta — regras
+
+```python
+class Meta:
+    ordering    = ['-publish']                             # lista, não tuplo
+    indexes     = [models.Index(fields=['id', 'slug'])]   # não index_together
+    constraints = [
+        models.UniqueConstraint(fields=['user', 'post'], name='unique_bookmark'),
+    ]                                                      # não unique_together
+```
+
+## ForeignKey / relações
+
+```python
+author = models.ForeignKey(
+    settings.AUTH_USER_MODEL,   # nunca User directamente
+    on_delete=models.CASCADE,   # obrigatório
+    related_name='blog_posts',  # sempre explícito
+)
+
+# Models abstractos — %(class)s evita colisões de related_name
+class ItemBase(models.Model):
+    owner = models.ForeignKey(User, related_name='%(class)s_related', on_delete=models.CASCADE)
+    class Meta:
+        abstract = True
+```
+
+## Campos — regras rápidas
+
+| Campo | Regra |
+|---|---|
+| Preços | `DecimalField(max_digits=10, decimal_places=2)` — nunca `CharField` |
+| Texto opcional | `TextField(blank=True)` — nunca `null=True` em `CharField`/`TextField` |
+| Booleano nullable | `BooleanField(null=True)` — nunca `NullBooleanField` |
+| Timestamps | `auto_now_add=True` (created), `auto_now=True` (updated) |
+| Slug auto | override `save()`: `if not self.slug: self.slug = slugify(self.title)` |
+
+## django-parler (myshop)
+
+```python
+class Product(TranslatableModel):
+    translations = TranslatedFields(      # nome exacto 'translations' — sem typos
+        name=models.CharField(max_length=200),
+        slug=models.SlugField(max_length=200),
+    )
+```
+
+**Filtros ORM com parler:**
+```python
+Product.objects.filter(translations__slug=slug, available=True)   # CORRECTO
+Product.objects.filter(slug=slug)                                  # FieldError
+```
+
+**Aceder/escrever em código Python:**
+```python
+product.set_current_language('en')
+product.name = 'New Name'
+product.save()
+```
+
+**Settings obrigatório** (evita `DoesNotExist` quando falta tradução):
+```python
+PARLER_LANGUAGES = {
+    None: ({'code': 'en'}, {'code': 'es'}),
+    'default': {'fallback': 'en', 'hide_untranslated': False},
+}
+```
+
+## Queries ORM — N+1
+
+```python
+# FK/OneToOne → select_related (1 query com JOIN)
+Post.published.select_related('author')
+
+# M2M / reverse FK → prefetch_related (2 queries)
+Post.published.prefetch_related('tags', 'comments')
+
+# parler → prefetch_related('translations')
+Product.objects.prefetch_related('translations').filter(available=True)
+
+# Contagem → annotate, não Python; existência → exists(), não count() > 0
+posts = Post.published.annotate(total_comments=Count('comments'))
+Bookmark.objects.filter(user=request.user, post=post).exists()
+```
+
+## Signals — estrutura e critério
+
+```python
+# blog/signals.py
+@receiver(post_save, sender=Bookmark)
+def bookmark_created(sender, instance, created, **kwargs):
+    if created: pass
+
+# blog/apps.py — importar DENTRO de ready(), nunca no topo do módulo
+class BlogConfig(AppConfig):
+    def ready(self):
+        import blog.signals  # noqa: F401
+```
+
+| Situação | Abordagem |
+|---|---|
+| Lógica no mesmo modelo | Override `save()` |
+| Efeito secundário desacoplado | Signal |
+| Slug auto / campo calculado | Override `save()` |
+| Notificar outra app/sistema | Signal |

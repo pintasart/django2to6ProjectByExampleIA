@@ -1,0 +1,155 @@
+---
+description: Padrões para testes Django 6.x com pytest-django — configuração, fixtures, parler, AJAX, mock Redis/Celery. Para os 4 projectos independentes.
+globs: ["**/tests*.py", "**/conftest.py"]
+alwaysApply: false
+---
+
+# Django Testing — pytest-django (Django 6.x)
+
+## Configuração por projecto
+
+Cada projecto é independente. Criar na raiz do projecto:
+
+```ini
+# mysite/pytest.ini
+[pytest]
+DJANGO_SETTINGS_MODULE = mysite.settings
+python_files = tests.py tests_*.py *_tests.py
+```
+
+```ini
+# educa/pytest.ini  (settings múltiplos)
+[pytest]
+DJANGO_SETTINGS_MODULE = educa.settings.local
+```
+
+## Marcadores e acesso à BD
+
+```python
+@pytest.mark.django_db                  # obrigatório para qualquer acesso à BD
+def test_post_count():
+    assert Post.objects.count() == 0
+
+@pytest.mark.django_db
+class TestPostModel:
+    def test_str(self, published_post):
+        assert str(published_post) == published_post.title
+```
+
+## Fixtures base (conftest.py)
+
+```python
+@pytest.fixture
+def user(db):
+    return get_user_model().objects.create_user(
+        username='testuser', email='test@example.com', password='testpass123')
+
+@pytest.fixture
+def published_post(db, user):
+    return Post.objects.create(
+        title='Test Post', slug='test-post', author=user,
+        body='body', status=Post.Status.PUBLISHED)
+```
+
+### Fixtures django-parler (myshop)
+
+```python
+@pytest.fixture
+def product(db, category):
+    p = Product(category=category, price='9.99', available=True)
+    p.set_current_language('en')   # obrigatório antes de atribuir campos traduzidos
+    p.name = 'Test Product'
+    p.slug = 'test-product'
+    p.save()
+    return p
+```
+
+## Testar views
+
+```python
+@pytest.mark.django_db
+class TestPostListView:
+
+    def test_returns_200(self, client):
+        assert client.get(reverse('blog:post_list')).status_code == 200
+
+    def test_only_published(self, client, published_post, draft_post):
+        response = client.get(reverse('blog:post_list'))
+        assert published_post in response.context['posts']
+        assert draft_post not in response.context['posts']
+
+    def test_redirects_anonymous(self, client):
+        response = client.get(reverse('account:dashboard'))
+        assert response.status_code == 302
+
+    def test_ok_authenticated(self, client, user):
+        client.force_login(user)          # force_login é mais rápido que login()
+        assert client.get(reverse('account:dashboard')).status_code == 200
+```
+
+## Testar views AJAX
+
+```python
+@pytest.mark.django_db
+class TestBookmarkAjax:
+
+    def test_requires_post(self, client, user):
+        client.force_login(user)
+        assert client.get(reverse('blog:post_bookmark', args=[1])).status_code == 405
+
+    def test_requires_login(self, client):
+        assert client.post(reverse('blog:post_bookmark', args=[1])).status_code == 302
+
+    def test_returns_json_state(self, client, user, published_post):
+        client.force_login(user)
+        response = client.post(reverse('blog:post_bookmark', args=[published_post.id]))
+        assert response.status_code == 200
+        data = json.loads(response.content)
+        assert 'bookmarked' in data
+        assert 'count' in data
+```
+
+## Mock de serviços externos
+
+### Redis
+
+```python
+def test_detail_sem_redis(client, product):
+    with patch('shop.views.Recommender') as mock_rec:
+        mock_rec.side_effect = Exception('Connection refused')
+        response = client.get(reverse('shop:product_detail', args=[product.id, product.slug]))
+        assert response.status_code == 200
+        assert response.context['recommended_products'] == []
+```
+
+### Celery
+
+```python
+# settings de teste — executar tasks inline sem broker
+CELERY_TASK_ALWAYS_EAGER = True
+
+# ou via mock
+def test_order_task_called(client, form_data):
+    with patch('orders.views.order_created') as mock_task:
+        client.post(reverse('orders:order_create'), form_data)
+        mock_task.delay.assert_called_once()
+```
+
+## Comandos
+
+```bash
+pytest                                          # todos os testes
+pytest blog/tests.py -v                         # ficheiro específico
+pytest blog/tests.py::TestPostModel::test_str   # teste específico
+pytest -x                                       # parar ao primeiro erro
+pytest -s                                       # mostrar print()
+```
+
+## Regras
+
+- `@pytest.mark.django_db` obrigatório em qualquer teste que aceda à BD
+- `client.force_login(user)` em vez de `client.login()` — não autentica password
+- `set_current_language('en')` antes de atribuir campos parler em fixtures
+- Não misturar `django.test.TestCase` com fixtures pytest — incompatíveis
+- Redis e Celery sempre em mock nos testes unitários
+- Cada teste cria os próprios dados — nunca partilhar estado mutável entre testes

@@ -1,0 +1,91 @@
+---
+description: Referência rápida de APIs removidas e depreciadas no Django 3.x–6.x. Usar como checklist ao portar código antigo do livro Django 2 By Example.
+globs: ["**/*.py", "**/templates/**/*.html"]
+alwaysApply: false
+---
+
+# Django 6.x — APIs Removidas e Depreciadas
+
+## Removidas (causam erro em Django 4–6)
+
+| API antiga | Erro | Substituição |
+|---|---|---|
+| `url()` em urls.py | `ImportError` | `path()` / `re_path()` |
+| `ugettext` / `ugettext_lazy` | `ImportError` | `gettext` / `gettext_lazy` |
+| `request.is_ajax()` | `AttributeError` | `request.headers.get('X-Requested-With') == 'XMLHttpRequest'` |
+| `NullBooleanField` | `RemovedInDjango50Warning` → erro | `BooleanField(null=True)` |
+| `{% load staticfiles %}` | `TemplateSyntaxError` | `{% load static %}` |
+| `HttpRequest.META['HTTP_...']` para headers | — | `request.headers['...']` (dict-like, case-insensitive) |
+
+## Depreciadas (aviso em Django 4.2, erro em Django 5+)
+
+| API | Estado | Substituição |
+|---|---|---|
+| `index_together` na Meta | Depreciado 4.2 | `Meta.indexes = [models.Index(fields=[...])]` |
+| `unique_together` na Meta | Depreciado 4.2 | `Meta.constraints = [UniqueConstraint(...)]` |
+| `DEFAULT_AUTO_FIELD` não definido | Warning | `DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'` |
+
+## Padrões do livro Django 2 a corrigir
+
+```python
+# LIVRO (Django 2) → CORRECTO (Django 6)
+
+# urls.py
+url(r'^post/(?P<id>\d+)/$', views.post)
+# →
+path('post/<int:id>/', views.post)
+
+# settings.py
+from django.utils.translation import ugettext_lazy as _
+# →
+from django.utils.translation import gettext_lazy as _
+
+# models.py — choices
+STATUS_CHOICES = (('draft', 'Draft'), ('published', 'Published'))
+status = models.CharField(choices=STATUS_CHOICES, default='draft')
+# →
+class Status(models.TextChoices):
+    DRAFT = 'draft', 'Draft'
+    PUBLISHED = 'published', 'Published'
+status = models.CharField(choices=Status, default=Status.DRAFT)
+
+# models.py — Meta
+class Meta:
+    index_together = (('id', 'slug'),)
+# →
+class Meta:
+    indexes = [models.Index(fields=['id', 'slug'])]
+
+# views.py — AJAX check
+if request.is_ajax():
+# →
+if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+
+# views.py — decoradores AJAX (livro tem ordem errada em image_like)
+@login_required
+@require_POST
+# →
+@require_POST
+@login_required
+```
+
+## Parler — erros comuns do livro
+
+```python
+# Typo no nome do descriptor (Product em myshop)
+tranlations = TranslatedFields(...)    # typo — parler não deteta em runtime
+# →
+translations = TranslatedFields(...)   # nome correcto
+
+# Filtro directo em campo traduzido
+Product.objects.filter(slug=slug)      # FieldError
+# →
+Product.objects.filter(translations__slug=slug)
+
+# get_absolute_url sem tradução activa → TranslationDoesNotExist silenciado pelo template → href=""
+# Solução: PARLER_LANGUAGES com fallback em settings.py
+PARLER_LANGUAGES = {
+    None: ({'code': 'en'}, {'code': 'es'}),
+    'default': {'fallback': 'en', 'hide_untranslated': False},
+}
+```

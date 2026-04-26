@@ -1,0 +1,181 @@
+---
+description: Padrões para views Django 6.x — FBV, CBV, AJAX, autenticação, PRG, paginação, serviços externos. Retirado do código real dos 4 projectos.
+globs: ["**/views.py"]
+alwaysApply: false
+---
+
+# Django Views — Padrões (Django 6.x)
+
+## FBV vs CBV — decisão rápida
+
+| Situação | Escolha |
+|---|---|
+| Operação simples / sem estado | FBV |
+| AJAX / toggle | FBV + `@require_POST` |
+| GET + POST no mesmo recurso | CBV base `View` |
+| Listagem paginada pública | CBV `View` com paginator manual |
+| Listagem autenticada | `LoginRequiredMixin + ListView` |
+| CRUD com herança | CBV genéricas + Mixins |
+| Admin restrito | FBV + `@staff_member_required` |
+
+## FBV — padrão base
+
+```python
+def product_list(request, category_slug=None):
+    products = Product.objects.filter(available=True)
+    if category_slug:
+        category = get_object_or_404(Category, translations__slug=category_slug)
+        products = products.filter(category=category)
+    return render(request, 'shop/product/list.html', {'products': products})
+```
+
+## FBV com form — PRG obrigatório
+
+```python
+def post_share(request, post_id):
+    post = get_object_or_404(Post, id=post_id, status='published')
+    if request.method == 'POST':
+        form = EmailPostForm(request.POST)
+        if form.is_valid():
+            # ... lógica ...
+            return redirect(post.get_absolute_url())   # PRG — evita duplicação em F5
+    else:
+        form = EmailPostForm()
+    return render(request, 'blog/post/share.html', {'post': post, 'form': form})
+```
+
+## CBV com `View` base
+
+```python
+class PostDetailView(View):
+
+    def _build_context(self, post, form):   # prefixo _ para não colidir com ContextMixin
+        return {'post': post, 'comment_form': form}
+
+    def get(self, request, year, month, day, post):
+        post_obj = get_object_or_404(Post.objects.select_related('author'),
+                                     slug=post, status='published')
+        return render(request, 'blog/post/detail.html',
+                      self._build_context(post_obj, CommentForm()))
+
+    def post(self, request, year, month, day, post):
+        post_obj = get_object_or_404(Post.objects.select_related('author'),
+                                     slug=post, status='published')
+        form = CommentForm(data=request.POST)
+        if form.is_valid():
+            comment = form.save(commit=False)
+            comment.post = post_obj
+            comment.save()
+            return redirect(post_obj.get_absolute_url())   # PRG
+        return render(request, 'blog/post/detail.html',
+                      self._build_context(post_obj, form))
+```
+
+> `get_context_data(self, custom_args)` em CBV base `View` colide com o protocolo `ContextMixin`. Usar sempre nome privado como `_build_context`.
+
+## CBV com Mixins (educa)
+
+```python
+class OwnerMixin:
+    def get_queryset(self):
+        return super().get_queryset().filter(owner=self.request.user)
+
+class OwnerEditMixin:
+    def form_valid(self, form):
+        form.instance.owner = self.request.user
+        return super().form_valid(form)
+
+# Ordem: mais específico à esquerda, mais genérico à direita
+class CourseCreateView(PermissionRequiredMixin, OwnerCourseEditMixin, CreateView):
+    permission_required = 'courses.add_course'
+```
+
+## Views AJAX
+
+### Decoradores — ordem correcta
+
+```python
+@require_POST        # rejeita GET com 405 antes de verificar autenticação
+@login_required
+def post_bookmark(request, post_id): ...
+```
+
+### Resposta JSON — devolver estado actualizado
+
+```python
+return JsonResponse({'bookmarked': created, 'count': post.bookmarked_by.count()})
+# Nunca: JsonResponse({'status': 'ok'})  — obriga o JS a uma segunda query
+
+# Erros com status HTTP correcto
+return JsonResponse({'error': 'Não encontrado'}, status=404)
+```
+
+### Verificar request AJAX (`is_ajax()` removido em Django 3.1)
+
+```python
+if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+    return render(request, 'images/image/list_ajax.html', context)
+return render(request, 'images/image/list.html', context)
+```
+
+### Excepções em AJAX — nunca `except: pass`
+
+```python
+try:
+    image = Image.objects.get(id=image_id)
+except Image.DoesNotExist:
+    return JsonResponse({'error': 'Imagem não encontrada'}, status=404)
+```
+
+## Autenticação
+
+```python
+# FBV
+@login_required
+def edit(request): ...
+
+@staff_member_required
+def admin_order_detail(request, order_id): ...
+
+# CBV — nunca decoradores em CBVs; usar mixins
+class ManageCourseListView(LoginRequiredMixin, ListView): ...
+
+# Proteger só o POST de uma CBV
+@method_decorator(login_required, name='post')
+class PostDetailView(View): ...
+```
+
+## Serviços externos — Redis e Celery
+
+```python
+# Redis — sempre try/except (pode não estar a correr em dev)
+try:
+    r = Recommender()
+    recommended_products = r.suggest_products_for([product], 4)
+except Exception:
+    recommended_products = []
+
+# Celery — .delay() para assíncrono; nunca chamar a task directamente
+order_created.delay(order.id)
+```
+
+## Paginação
+
+```python
+paginator = Paginator(queryset, 3)
+page = request.GET.get('page')
+try:
+    posts = paginator.page(page)
+except PageNotAnInteger:
+    posts = paginator.page(1)
+except EmptyPage:
+    posts = paginator.page(paginator.num_pages)
+```
+
+## `form.save(commit=False)` — associar dados extras
+
+```python
+new_user = form.save(commit=False)
+new_user.set_password(form.cleaned_data['password'])
+new_user.save()
+```

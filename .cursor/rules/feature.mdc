@@ -1,401 +1,83 @@
 ---
-description: Boas práticas Django para a feature de bookmarks — queries, AJAX, signals, naming e proibições. Aplicar a todos os ficheiros da app blog e a qualquer nova feature de interacção utilizador-conteúdo.
-globs:
-  - "mysite/blog/views.py"
-  - "mysite/blog/models.py"
-  - "mysite/blog/urls.py"
-  - "mysite/blog/signals.py"
-  - "mysite/blog/apps.py"
-  - "mysite/blog/templates/**/*.html"
-  - "mysite/blog/templatetags/*.py"
+description: Boas práticas para a feature de bookmarks no blog — queries, AJAX toggle, signals, naming. Aplicar à app blog e a qualquer nova feature de interacção utilizador-conteúdo.
+globs: ["mysite/blog/views.py", "mysite/blog/models.py", "mysite/blog/urls.py", "mysite/blog/signals.py", "mysite/blog/apps.py"]
 alwaysApply: false
 ---
 
-# Feature Rules — Blog Bookmarks
+# Feature — Blog Bookmarks
 
-## 1. Queries: `select_related` vs `prefetch_related`
-
-### Regra de decisão
-
-```
-ForeignKey / OneToOne  →  select_related   (JOIN em SQL, 1 query)
-ManyToMany / reverse FK  →  prefetch_related  (2 queries separadas)
-```
-
-### Aplicação concreta nesta feature
+## Queries obrigatórias
 
 ```python
-# CORRECTO — Bookmark tem FK para Post e Post tem FK para User (author)
-# Uma só query com dois JOINs
+# Bookmark tem FK → Post → User: select_related com dois saltos
 Bookmark.objects.filter(user=request.user)\
                 .select_related('post', 'post__author')\
                 .order_by('-created')
 
-# CORRECTO — Tags são M2M em Post; prefetch evita N queries no loop
-Post.published.all().prefetch_related('tags')
-
-# CORRECTO — comentários são reverse FK (Post → Comment); nunca select_related aqui
-Post.published.all().prefetch_related('comments')
-
-# ERRADO — select_related numa relação M2M levanta ValueError
-Post.published.all().select_related('tags')          # ← NUNCA
-
-# ERRADO — sem optimização na listagem de bookmarks (N+1 queries)
-Bookmark.objects.filter(user=request.user)           # ← sem select_related
+# Tags são M2M — sempre prefetch_related, nunca select_related
+Post.published.prefetch_related('tags')
 ```
 
-### Verificar N+1 em desenvolvimento
-
-Activar query log no settings (dev only):
+## View de toggle AJAX
 
 ```python
-# mysite/mysite/settings.py — apenas em DEBUG
-if DEBUG:
-    LOGGING = {
-        'version': 1,
-        'handlers': {'console': {'class': 'logging.StreamHandler'}},
-        'loggers': {
-            'django.db.backends': {
-                'handlers': ['console'],
-                'level': 'DEBUG',
-            },
-        },
-    }
-```
-
-Qualquer view que itere sobre um queryset em template deve ter `select_related`
-ou `prefetch_related` aplicado **antes** de o queryset ser passado ao contexto.
-
----
-
-## 2. Padrão de Resposta para Views AJAX
-
-### Formato obrigatório neste projecto
-
-```python
-# SUCESSO — sempre devolve estado actualizado e dados que o JS precisa
-JsonResponse({'bookmarked': True,  'count': 42})
-JsonResponse({'bookmarked': False, 'count': 41})
-
-# ERRO — sempre com status HTTP correcto, nunca 200 com erro no body
-JsonResponse({'error': 'Post não encontrado'}, status=404)
-JsonResponse({'error': 'Método não permitido'}, status=405)
-JsonResponse({'error': 'Autenticação necessária'}, status=401)
-```
-
-### O que o livro faz (bookmarks/images) vs o que fazer aqui
-
-O livro usa `{'status': 'ok'}` / `{'status': 'ko'}` sem dados adicionais —
-padrão minimal que obriga o JS a fazer uma segunda query para actualizar o UI.
-
-Nesta feature o JSON **deve devolver o novo estado** para que o JS possa
-actualizar o botão e o contador sem recarregar a página:
-
-```python
-# CORRECTO — JS tem tudo o que precisa numa resposta
-return JsonResponse({'bookmarked': created, 'count': post.bookmarked_by.count()})
-
-# INCORRECTO — JS fica sem saber o estado real após toggle
-return JsonResponse({'status': 'ok'})
-```
-
-### Decoradores obrigatórios em views AJAX
-
-```python
-# ORDEM CORRECTA — require_POST antes de login_required
-# (igual ao padrão de user_follow e image_like no livro)
-@require_POST
+@require_POST        # antes de @login_required
 @login_required
 def post_bookmark(request, post_id):
-    ...
+    post = get_object_or_404(Post, id=post_id, status='published')
+    bookmark, created = Bookmark.objects.get_or_create(user=request.user, post=post)
+    if not created:
+        bookmark.delete()
+    return JsonResponse({'bookmarked': created, 'count': post.bookmarked_by.count()})
 ```
 
-Porquê esta ordem: `@require_POST` rejeita `GET` com 405 sem executar código de
-autenticação. Inverter a ordem força o `@login_required` a correr (e a redirectar)
-em requests `GET` que nunca deveriam chegar a esta view.
+Resposta deve devolver **estado actualizado** (`bookmarked` + `count`) para o JS actualizar o UI sem segunda query. Nunca `{'status': 'ok'}`.
 
-### `request.is_ajax()` está removido desde Django 3.1
-
-```python
-# PROIBIDO — removido em Django 3.1, lança AttributeError em Django 4+
-if request.is_ajax():   # ← NUNCA
-
-# CORRECTO — verificar header explicitamente
-if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-    ...
-
-# MAIS CORRECTO para esta feature — a view de toggle é exclusivamente AJAX,
-# portanto o decorador @require_POST já garante que não há resposta HTML.
-# Não é necessário verificar is_ajax de todo.
-```
-
-### JS do lado do cliente — padrão fetch sem jQuery
-
-O projecto `mysite` não tem jQuery nem bundler. Usar `fetch` nativo:
+## JS — fetch nativo (sem jQuery)
 
 ```javascript
-// CORRECTO
-fetch(url, {
-    method: 'POST',
-    headers: {'X-CSRFToken': csrfToken},
-})
-.then(r => {
-    if (!r.ok) throw new Error(r.status);
-    return r.json();
-})
-.then(data => { /* actualizar UI com data.bookmarked e data.count */ })
-.catch(err => { /* mostrar erro ao utilizador, não silenciar */ });
-
-// PROIBIDO — silenciar erros de rede/servidor
-fetch(url).then(r => r.json()).then(data => { ... });  // sem .catch
+fetch(url, {method: 'POST', headers: {'X-CSRFToken': csrfToken}})
+  .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+  .then(data => { /* actualizar botão e contador com data.bookmarked / data.count */ })
+  .catch(err => { /* mostrar erro — nunca silenciar */ });
 ```
 
----
-
-## 3. Signals Django — Como Estruturar Neste Projecto
-
-### Quando usar signal nesta feature
-
-Usar signal **apenas** para efeitos secundários desacoplados do toggle principal.
-Exemplos válidos:
-- Actualizar um campo desnormalizado `bookmark_count` em `Post` (se adicionado no futuro)
-- Registar actividade num log/stream (padrão `create_action` do livro)
-- Enviar notificação ao autor do post
-
-O toggle em si (`get_or_create` / `delete`) **não é um signal** — é lógica de negócio
-directa na view.
-
-### Estrutura de ficheiros (seguir padrão de `bookmarks/images/`)
-
-```
-mysite/blog/
-├── signals.py      ← definição dos receivers
-└── apps.py         ← importação em ready()
-```
+## Signal — apenas efeitos secundários
 
 ```python
-# blog/signals.py
-from django.db.models.signals import post_save, post_delete
-from django.dispatch import receiver
-from .models import Bookmark
-
+# blog/signals.py — para log de actividade ou notificação ao autor
 @receiver(post_save, sender=Bookmark)
 def bookmark_created(sender, instance, created, **kwargs):
     if created:
-        # ex: create_action(instance.user, 'bookmarked', instance.post)
-        pass
+        pass  # ex: create_action(instance.user, 'bookmarked', instance.post)
 
-@receiver(post_delete, sender=Bookmark)
-def bookmark_deleted(sender, instance, **kwargs):
-    # ex: efeito secundário após remoção
-    pass
-```
-
-```python
-# blog/apps.py — importar DENTRO de ready(), nunca no topo do módulo
-from django.apps import AppConfig
-
+# blog/apps.py — indentação DENTRO da classe (bug do livro: ready fora da classe)
 class BlogConfig(AppConfig):
     name = 'blog'
-
     def ready(self):
         import blog.signals  # noqa: F401
 ```
 
-### O que o livro faz de errado (não repetir)
+O toggle em si (`get_or_create` / `delete`) é lógica da view — não é um signal.
 
-Em `bookmarks/images/apps.py` o método `ready()` está **fora da classe** —
-não está indentado. Resultado: os signals nunca são registados.
+## Naming
 
-```python
-# ERRADO — como está no livro (apps.py de images)
-class ImagesConfig(AppConfig):
-    name = 'images'
+| Tipo | Nome |
+|---|---|
+| URL toggle | `post_bookmark` |
+| URL lista | `post_bookmarks` (plural) |
+| FBV toggle | `post_bookmark(request, post_id)` |
+| CBV lista | `BookmarkedPostsView(LoginRequiredMixin, ListView)` |
+| Template lista | `blog/post/bookmarks.html` |
+| Contexto | `is_bookmarked`, `bookmark_count`, `bookmarks` |
 
-def ready(self):           # ← fora da classe, nunca executado
-    import images.signals
+## Proibições
 
-# CORRECTO
-class ImagesConfig(AppConfig):
-    name = 'images'
-
-    def ready(self):       # ← indentado dentro da classe
-        import images.signals  # noqa: F401
-```
-
-### Signal vs lógica na view — critério de decisão
-
-```
-Efeito principal do toggle  →  na view (explícito, testável)
-Efeito secundário desacoplado  →  signal (não interessa a quem fez o toggle)
-Actualizar dados do mesmo modelo  →  na view ou num método do model
-Notificar outro sistema/app  →  signal
-```
-
----
-
-## 4. Naming Conventions — URLs, Views e Templates
-
-### URLs
-
-```python
-# Padrão: <recurso>_<acção> — igual ao existente no projecto
-path('', views.post_list, name='post_list'),
-path('<int:post_id>/share/',    views.post_share,    name='post_share'),
-
-# Novas URLs da feature — seguir exactamente o mesmo padrão
-path('<int:post_id>/bookmark/', views.post_bookmark, name='post_bookmark'),
-path('bookmarks/',              views.BookmarkedPostsView.as_view(), name='post_bookmarks'),
-```
-
-Regras:
-- `post_id` (inteiro) para operações de acção; slug+data apenas para URLs públicas/indexáveis
-- Namespace `blog:` sempre presente — `{% url 'blog:post_bookmark' post.id %}`
-- Plural no nome quando a view devolve lista: `post_bookmarks`, não `post_bookmark_list`
-
-### Views
-
-```python
-# FBV — snake_case, prefixo do recurso principal
-def post_bookmark(request, post_id): ...    # toggle AJAX
-def post_list(request, tag_slug=None): ...  # listagem existente
-def post_share(request, post_id): ...       # form existente
-
-# CBV — PascalCase, sufixo da classe base
-class BookmarkedPostsView(LoginRequiredMixin, ListView): ...
-# NÃO usar: BookmarkList, BookmarksView, UserBookmarkListView
-```
-
-Critério FBV vs CBV neste projecto:
-- **FBV** → operação com efeitos secundários, lógica condicional, resposta JSON
-- **CBV** → listagem paginada com autenticação obrigatória (LoginRequiredMixin + ListView)
-
-### Templates
-
-```
-blog/post/detail.html          ← existente; adicionar secção bookmark
-blog/post/list.html            ← existente; não alterar estrutura
-blog/post/bookmarks.html       ← novo; lista de bookmarks do utilizador
-```
-
-Regras:
-- Directório `blog/post/` para templates de Post (seguir estrutura existente)
-- Nome do template corresponde ao `context_object_name` ou à acção principal
-- Nunca criar `bookmark_detail.html` — Bookmark não tem página própria
-
-### Variáveis de contexto
-
-```python
-# CORRECTO — nomes descritivos, consistentes com o existente no projecto
-{'post': post, 'is_bookmarked': True, 'bookmark_count': 42}
-{'bookmarks': queryset, 'page_obj': page}   # page_obj padrão de ListView
-
-# INCORRECTO — abreviações, nomes genéricos ou inconsistentes
-{'bm': queryset, 'data': post, 'flag': True}
-```
-
----
-
-## 5. O Que Nunca Fazer
-
-### Lógica de negócio nos templates
-
-```django
-{# PROIBIDO — query directa no template #}
-{% for b in request.user.bookmarks.all %}
-
-{# PROIBIDO — lógica condicional baseada em atributos do modelo #}
-{% if post.bookmarked_by.filter(user=request.user).exists %}
-
-{# PROIBIDO — contagem no template #}
-{{ post.bookmarked_by.count }}
-```
-
-Toda a lógica de "está bookmarked?", "quantos bookmarks?" e "quais os posts
-bookmarked?" pertence à view ou a um template tag. O template só renderiza
-variáveis que a view lhe entrega.
-
-```python
-# CORRECTO — view calcula, template apenas mostra
-context = {
-    'is_bookmarked': Bookmark.objects.filter(user=request.user, post=post).exists(),
-    'bookmark_count': post.bookmarked_by.count(),
-}
-```
-
-### Nunca usar `get()` sem tratar `DoesNotExist`
-
-```python
-# PROIBIDO
-post = Post.objects.get(id=post_id)         # lança excepção não tratada
-
-# CORRECTO — seguir padrão de todas as views existentes no projecto
-post = get_object_or_404(Post, id=post_id, status='published')
-```
-
-### Nunca aceitar toggle por GET
-
-```python
-# PROIBIDO — altera estado com GET (crawlers e prefetch disparam isto)
-path('<int:post_id>/bookmark/', views.post_bookmark, name='post_bookmark'),
-# sem @require_POST na view
-
-# CORRECTO — @require_POST + método POST no fetch()
-@require_POST
-@login_required
-def post_bookmark(request, post_id): ...
-```
-
-### Nunca duplicar a query de contagem no toggle
-
-```python
-# PROIBIDO — duas queries para o mesmo valor
-bookmark_count = Bookmark.objects.filter(post=post).count()
-post.bookmark_count = Bookmark.objects.filter(post=post).count()  # redundante
-
-# CORRECTO — uma query, resultado reutilizado
-count = post.bookmarked_by.count()
-return JsonResponse({'bookmarked': created, 'count': count})
-```
-
-### Nunca usar `except: pass` para silenciar erros
-
-```python
-# PROIBIDO — padrão presente em image_like do livro; mascara bugs reais
-try:
-    image = Image.objects.get(id=image_id)
-    ...
-    return JsonResponse({'status': 'ok'})
-except:
-    pass
-return JsonResponse({'status': 'ko'})
-
-# CORRECTO — tratar a excepção específica e devolver status HTTP adequado
-try:
-    post = Post.objects.get(id=post_id, status='published')
-except Post.DoesNotExist:
-    return JsonResponse({'error': 'Post não encontrado'}, status=404)
-```
-
-### Nunca registar signals fora do `ready()` de `AppConfig`
-
-```python
-# PROIBIDO — importar signals no topo de models.py ou views.py
-# causa importações circulares e comportamento não determinístico
-from . import signals   # ← no topo de models.py
-
-# CORRECTO — único local válido
-class BlogConfig(AppConfig):
-    def ready(self):
-        import blog.signals  # noqa: F401
-```
-
-### Nunca criar migração com nome auto-gerado para features explícitas
-
-```bash
-# PROIBIDO — nome genérico não documenta a intenção
-python manage.py makemigrations
-
-# CORRECTO — nome descreve a alteração
-python manage.py makemigrations blog --name="add_bookmark_model"
-```
+- **`select_related('tags')`** — M2M; lança `ValueError`
+- **`request.is_ajax()`** — removido Django 3.1; usar `request.headers.get('X-Requested-With')`
+- **`@login_required` antes de `@require_POST`** — inverter sempre
+- **`except: pass`** em views AJAX — capturar excepção específica com status correcto
+- **Lógica de "está bookmarked?" no template** — calcular na view: `Bookmark.objects.filter(...).exists()`
+- **`Post.objects.get(id=post_id)`** sem tratar `DoesNotExist` — usar `get_object_or_404`
+- **Toggle por GET** — sempre `@require_POST`; crawlers e prefetch disparariam alterações de estado
+- **`ready()` fora da classe `AppConfig`** — signals nunca registados; manter indentação
